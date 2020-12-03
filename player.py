@@ -41,17 +41,36 @@ class player(object):
         self.bullets = []
 
         # quais armas estão ativas no momento para controlar seus efeitos e permitir que funcionam de forma acumulativo
-        self.gun_active = {'shot': False, 'machine': False, 'wheel': False}
+        self.active_item = {'multi_shot': -1, 'fast_shot': -1, 'wheel': -1, 'clock': -1}
         
         # coordenadas mouse
         self.mouseX = self.x
         self.mouseY = self.y
 
+        # i_frames é um bool que diz se os frames de invulnerável
         self.i_frames = False
+
+        # tempo de duração dos frames de invulnerabilidade
         self.i_frames_duration = 1000
+
+        # ticks da ultima vez que o jogador levou dano para calcular o tempo de frames de invulnerabilidade
         self.ticks_last_hit = 0
 
+        # blink vai ser usado para 'piscar' o jogador quando este estiver invulnerável, mostrando ele frame sim e frame não
         self.blink = 0
+
+        # som do projétil batendo em uma parede
+        self.projectile_hit_wall = pg.mixer.Sound("sounds/projectile_wall.wav")
+
+        # vida do jogador
+        self.max_health = 3
+        self.health = self.max_health
+
+        # item atual do jogador
+        self.current_item = None
+
+        # tempo de duração do item
+        self.item_duration = 10000
 
     # checa se o jogador está tocando um inimigo
     def check_enemy(self, enemies, t):
@@ -69,43 +88,32 @@ class player(object):
                         self.i_frames = True
                         # salva os ticks no momento do hit
                         self.ticks_last_hit = t
+                        # takes damage
+                        self.health -= 1
                         # interrompe a função
-                        return
+                        return True
+
         # se já se passou o tempo de duração dos frames de invulnerabilidade, desative a invunerabilidade
         elif t - self.ticks_last_hit > self.i_frames_duration:
             self.i_frames = False
 
-
-                
-
     # responsavel por calcular e controlar o movimento do jogador
     def calculate_speed(self, keys, mapa):
+        # velocidades em cada eixo
         speedX = 0
         speedY = 0
 
         # o jogador pode se mover em 8 direções ao todo, cima, baixo, esquerda, direita e as diagonais correspondentes
-        if keys[pg.K_a]:
-            if keys[pg.K_w]:
-                speedX = -self.d_vel
-                speedY = -self.d_vel
-            elif keys[pg.K_s]:
-                speedX = -self.d_vel
-                speedY = self.d_vel
-            else:
-                speedX = -self.vel
-        elif keys[pg.K_d]:
-            if keys[pg.K_w]:
-                speedX = self.d_vel
-                speedY = -self.d_vel
-            elif keys[pg.K_s]:
-                speedX = self.d_vel
-                speedY = self.d_vel
-            else:
-                speedX = self.vel
-        elif keys[pg.K_s]:
-            speedY = self.vel
-        elif keys[pg.K_w]:
-            speedY = -self.vel
+        x = (keys[pg.K_d] - keys[pg.K_a])
+        y = (keys[pg.K_s] - keys[pg.K_w])
+
+        # calcula a velocidade baseado nas teclas precionadas
+        if x != 0 and y != 0:
+            speedX = x*self.d_vel
+            speedY = y*self.d_vel
+        else:
+            speedX = x*self.vel
+            speedY = y*self.vel
 
         # garante que o jogador não sai dos limites da tela jogavel
         if speedX < 0 and self.x <= 0:
@@ -116,6 +124,7 @@ class player(object):
             speedY = 0
         elif (self.y >= self.WINDOW_HEIGHT-self.height and speedY > 0):
             speedY = 0
+
         # retorna as velocidades do jogador no eixo X e Y para calcular a sua nova posição
         return speedX, speedY
 
@@ -130,31 +139,8 @@ class player(object):
         
         # se o tempo desde o ultimo tiro for maior que o cool down, o jogador pode atirar
         if dt_shot >= self.shot_cooldown:
-            # essa parte é usada para ativar as diferentes armas, é apenas para debug e é temporaria
-            if keys[pg.K_h]:
-                self.gun_active = {'shot': False, 'machine': False, 'wheel': False}
-                self.ticks_last_shot = t
-            elif keys[pg.K_j]:
-                if self.gun_active['shot']:
-                    self.gun_active['shot'] = False
-                else:
-                    self.gun_active['shot'] = True
-                self.ticks_last_shot = t
-            elif keys[pg.K_k]:
-                if self.gun_active['machine']:
-                    self.gun_active['machine'] = False
-                else:
-                    self.gun_active['machine'] = True
-                self.ticks_last_shot = t
-            elif keys[pg.K_l]:
-                if self.gun_active['wheel']:
-                    self.gun_active['wheel'] = False
-                else:
-                    self.gun_active['wheel'] = True
-                self.ticks_last_shot = t
-
             # se a arma "wheel" estiver ativa, vamos gerar uma bala em todas as 8 direções principais
-            if self.gun_active['wheel']:
+            if self.active_item['wheel'] != -1 and t - self.active_item['wheel'] < self.item_duration:
                 if keys[pg.K_LEFT] or keys[pg.K_RIGHT] or keys[pg.K_UP] or keys[pg.K_DOWN]:
                     for i in range(0,360,45):
                         direction.append(i)
@@ -173,6 +159,7 @@ class player(object):
                     self.ticks_last_shot = t
             # caso contrario vamos ver em que direção o jogador está mirando e adicionar essa direção na lista
             else:
+                self.active_item['wheel'] = -1
                 if keys[pg.K_LEFT]:
                     if keys[pg.K_UP]:
                         direction.append(135)
@@ -206,7 +193,7 @@ class player(object):
                     dx = (self.mouseX-5) - (self.x+self.width/2)
                     dy = (self.mouseY-5) - (self.y+self.height/2)
 
-                    # calcula o angulo em graus
+                    # calcula o angulo em graus, eu inverto dy somente para tornar os angulos mais intuitivos no sentido convencional
                     rads = atan2(-dy, dx)
                     rads %= 2*pi
                     degs = round(degrees(rads))
@@ -218,10 +205,12 @@ class player(object):
                     self.ticks_last_shot = t
             
             # se a shot_gun estiver ativa, colocaremos mais duas balas, a +15º e a -15º de cada bala já existente
-            if self.gun_active['shot']:
+            if (self.active_item['multi_shot']) != -1 and (t - self.active_item['multi_shot'] < self.item_duration):
                 for i in range(len(direction)):
                     direction.append((direction[i]-15)%360)
                     direction.append((direction[i]+15)%360)
+            else:
+                self.active_item['multi_shot'] = -1
               
 
         # adiciona as balas novas nas direções dadas a lista
@@ -230,6 +219,7 @@ class player(object):
 
     # adiciona as balas nas direções selecionadas
     def add_bullets(self, direction):
+        # usa as direções para criar novas balas
         for i in direction:
             self.bullets.append(proj.projectile(self.x+self.width/2, self.y+self.height/2, 12, 12, self.win, self.WINDOW_WIDTH, self.WINDOW_HEIGHT, i))
 
@@ -292,37 +282,41 @@ class player(object):
         # teclas precionadas
         keys = pg.key.get_pressed()   
 
+        # ticks nesse momento
+        t = pg.time.get_ticks()
+
         # ajusta a velocidade do cooldown das balas, temporaria, fazer função propria para isso quando possível    
-        if self.gun_active['machine']:
+        if (self.active_item['fast_shot'] != -1) and (t - self.active_item['fast_shot'] < self.item_duration):
             self.shot_cooldown = self.shot_cooldown_normal/2
         else:
+            self.active_item['fast_shot'] = -1
             self.shot_cooldown = self.shot_cooldown_normal
         
+        # ativa o item atual
+        if keys[pg.K_SPACE] and self.current_item != None:
+                self.active_item[self.current_item] = t
+                self.current_item = None
+
         # chama calculate_speed para calcular as velocidades x e y do jogador
         speedX, speedY = self.calculate_speed(keys, mapa)
 
+        # descobre o maior movimento "válido" do jogador, (movimento em que o jogador não entre em um tile que 
+        # não deveria conseguir entrar), é uma gambiarra e definitivamente não é a melhor forma de fazer isso,
+        # mas foi o que eu consegui
         self.maior_movimento_valido(dt, mapa, speedX, speedY)
-
-        # garante que o jogador não sai dos limites da tela jogavel    
-        if (self.x <= 0 and speedX < 0):
-            self.x = 0
-        elif (self.x >= self.WINDOW_WIDTH-self.width and speedX > 0):
-            self.x = self.WINDOW_WIDTH-self.width
-        if (self.y <= 0 and speedY < 0):
-            self.y = 0
-        elif (self.y >= self.WINDOW_HEIGHT-self.height and speedY > 0):
-            self.y = self.WINDOW_HEIGHT-self.height
 
         # chama a função responsavel por fazer os tiros do jogador
         self.new_bullets(keys)
 
     # desenha as balas e depois o jogador por cima delas
     def draw(self):
+        # desenha as balas
         for bullet in self.bullets:
             bullet.draw()
+
         # se o jogador estiver invulnerável, ele ficara "piscando", sendo desenhado frame sim e frame não     
         if self.i_frames:
-            # só printa nos frames pares desde o frame em que o jogador levou o dano
+            # só desenha nos frames pares desde o frame em que o jogador levou o dano
             if self.blink % 2 == 0:
                 self.blink += 1
                 self.win.blit(self.img, (self.x, self.y))
@@ -334,9 +328,13 @@ class player(object):
 
     # updata o jogador e as balas
     def update(self, dt, mapa):
+        # controla o jogdor
         self.control(dt, mapa) 
+        
+        # update nas balas e remove as balas que não existem
         for bullet in self.bullets:
             if bullet.existe:
                 bullet.update(dt, mapa)
             if not(bullet.existe):
+                self.projectile_hit_wall.play()
                 self.bullets.pop(self.bullets.index(bullet))
